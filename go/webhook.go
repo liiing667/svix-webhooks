@@ -23,6 +23,7 @@ var tolerance time.Duration = 5 * time.Minute
 
 var (
 	errRequiredHeaders     = fmt.Errorf("missing required headers")
+	errMixedHeaderSchemes  = fmt.Errorf("mixed svix-* and webhook-* headers are not allowed; use one complete set of signature headers")
 	errInvalidHeaders      = fmt.Errorf("invalid signature headers")
 	errNoMatchingSignature = fmt.Errorf("no matching signature found")
 	errMessageTooOld       = fmt.Errorf("message timestamp too old")
@@ -74,6 +75,11 @@ func (wh *Webhook) VerifyIgnoringTimestamp(payload []byte, headers http.Header) 
 }
 
 func (wh *Webhook) verify(payload []byte, headers http.Header, enforceTolerance bool) error {
+	if hasAnyHeader(headers, "svix-id", "svix-signature", "svix-timestamp") &&
+		hasAnyHeader(headers, "webhook-id", "webhook-signature", "webhook-timestamp") {
+		return errMixedHeaderSchemes
+	}
+
 	msgId := headers.Get("svix-id")
 	msgSignature := headers.Get("svix-signature")
 	msgTimestamp := headers.Get("svix-timestamp")
@@ -122,6 +128,17 @@ func (wh *Webhook) verify(payload []byte, headers http.Header, enforceTolerance 
 		}
 	}
 	return errNoMatchingSignature
+}
+
+// hasAnyHeader reports whether any of the given headers are present,
+// including headers with empty values.
+func hasAnyHeader(headers http.Header, keys ...string) bool {
+	for _, key := range keys {
+		if _, ok := headers[http.CanonicalHeaderKey(key)]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (wh *Webhook) Sign(msgId string, timestamp time.Time, payload []byte) (string, error) {

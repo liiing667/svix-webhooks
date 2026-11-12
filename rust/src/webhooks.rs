@@ -32,6 +32,9 @@ pub enum WebhookError {
 
     #[error("payload invalid")]
     InvalidPayload,
+
+    #[error("mixed svix-* and webhook-* headers are not allowed; use one complete set of signature headers")]
+    MixedHeaderSchemes,
 }
 
 pub struct Webhook {
@@ -95,6 +98,8 @@ impl Webhook {
         headers: &HeaderMap,
         enforce_tolerance: bool,
     ) -> Result<(), WebhookError> {
+        Self::verify_header_scheme(headers)?;
+
         let msg_id = Self::get_header(headers, SVIX_MSG_ID_KEY, UNBRANDED_MSG_ID_KEY, "id")?;
         let msg_signature = Self::get_header(
             headers,
@@ -135,6 +140,33 @@ impl Webhook {
             })
             .then_some(())
             .ok_or(WebhookError::InvalidSignature)
+    }
+
+    /// A request must use exactly one header naming scheme: the complete
+    /// `svix-*` set or the complete `webhook-*` set. Carrying headers from both
+    /// sets (even for a single field) is rejected so that verifiers cannot
+    /// disagree on which header values were authenticated.
+    fn verify_header_scheme(headers: &HeaderMap) -> Result<(), WebhookError> {
+        let svix_present = [
+            SVIX_MSG_ID_KEY,
+            SVIX_MSG_SIGNATURE_KEY,
+            SVIX_MSG_TIMESTAMP_KEY,
+        ]
+        .into_iter()
+        .any(|key| headers.contains_key(key));
+        let unbranded_present = [
+            UNBRANDED_MSG_ID_KEY,
+            UNBRANDED_MSG_SIGNATURE_KEY,
+            UNBRANDED_MSG_TIMESTAMP_KEY,
+        ]
+        .into_iter()
+        .any(|key| headers.contains_key(key));
+
+        if svix_present && unbranded_present {
+            Err(WebhookError::MixedHeaderSchemes)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn sign(
@@ -193,6 +225,8 @@ impl Webhook {
 mod tests {
     use http::HeaderMap;
 
+    use crate::webhooks::WebhookError;
+
     use super::{
         Webhook, SVIX_MSG_ID_KEY, SVIX_MSG_SIGNATURE_KEY, SVIX_MSG_TIMESTAMP_KEY,
         UNBRANDED_MSG_ID_KEY, UNBRANDED_MSG_SIGNATURE_KEY, UNBRANDED_MSG_TIMESTAMP_KEY,
@@ -249,6 +283,75 @@ mod tests {
         ] {
             wh.verify(payload, &headers).unwrap();
         }
+    }
+
+    #[test]
+    fn test_verify_rejects_mixed_header_schemes() {
+        let secret = "whsec_C2FVsBQIhrscChlQIMV+b5sSYspob7oD".to_owned();
+        let msg_id = "msg_27UH4WbU6Z5A5EzD8u03UvzRbpk";
+        let payload = br#"{"email":"test@example.com","username":"test_user"}"#;
+        let wh = Webhook::new(&secret).unwrap();
+
+        let signature = wh.sign(msg_id, now(), payload).unwrap();
+
+        // Both complete header sets present.
+        let mut headers = get_svix_headers(msg_id, &signature);
+        headers.insert(UNBRANDED_MSG_ID_KEY, msg_id.parse().unwrap());
+        headers.insert(UNBRANDED_MSG_SIGNATURE_KEY, signature.parse().unwrap());
+        headers.insert(
+            UNBRANDED_MSG_TIMESTAMP_KEY,
+            now().to_string().parse().unwrap(),
+        );
+        assert!(matches!(
+            wh.verify(payload, &headers),
+            Err(WebhookError::MixedHeaderSchemes)
+        ));
+
+        // One field from the other scheme, in either direction.
+        for (svix_key, unbranded_key) in [
+            (SVIX_MSG_ID_KEY, UNBRANDED_MSG_ID_KEY),
+            (SVIX_MSG_SIGNATURE_KEY, UNBRANDED_MSG_SIGNATURE_KEY),
+            (SVIX_MSG_TIMESTAMP_KEY, UNBRANDED_MSG_TIMESTAMP_KEY),
+        ] {
+            let mut svix_headers = get_svix_headers(msg_id, &signature);
+            svix_headers.insert(unbranded_key, svix_headers.get(svix_key).unwrap().clone());
+            assert!(matches!(
+                wh.verify(payload, &svix_headers),
+                Err(WebhookError::MixedHeaderSchemes)
+            ));
+
+            let mut unbranded_headers = get_unbranded_headers(msg_id, &signature);
+            unbranded_headers.insert(
+                svix_key,
+                unbranded_headers.get(unbranded_key).unwrap().clone(),
+            );
+            assert!(matches!(
+                wh.verify(payload, &unbranded_headers),
+                Err(WebhookError::MixedHeaderSchemes)
+            ));
+        }
+
+        // Presence, not value, triggers the rejection.
+        let mut headers = get_svix_headers(msg_id, &signature);
+        headers.insert(UNBRANDED_MSG_ID_KEY, "".parse().unwrap());
+        assert!(matches!(
+            wh.verify(payload, &headers),
+            Err(WebhookError::MixedHeaderSchemes)
+        ));
+
+        // The rejection happens before timestamp tolerance checks.
+        let old_ts = now() - (super::TOLERANCE_IN_SECONDS as i64 + 1);
+        let old_signature = wh.sign(msg_id, old_ts, payload).unwrap();
+        let mut headers = get_svix_headers(msg_id, &old_signature);
+        headers.insert(UNBRANDED_MSG_ID_KEY, msg_id.parse().unwrap());
+        assert!(matches!(
+            wh.verify(payload, &headers),
+            Err(WebhookError::MixedHeaderSchemes)
+        ));
+        assert!(matches!(
+            wh.verify_ignoring_timestamp(payload, &headers),
+            Err(WebhookError::MixedHeaderSchemes)
+        ));
     }
 
     #[test]

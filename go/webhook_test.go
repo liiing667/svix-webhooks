@@ -70,6 +70,61 @@ func TestWebhook(t *testing.T) {
 			expectedErr: false,
 		},
 		{
+			name:        "both complete header sets are rejected",
+			testPayload: newTestPayload(time.Now()),
+			modifyPayload: func(tp *testPayload) {
+				tp.header.Set("webhook-id", tp.header.Get("svix-id"))
+				tp.header.Set("webhook-timestamp", tp.header.Get("svix-timestamp"))
+				tp.header.Set("webhook-signature", tp.header.Get("svix-signature"))
+			},
+			expectedErr: true,
+		},
+		{
+			name:        "single mixed svix id field is rejected",
+			testPayload: newTestPayload(time.Now()),
+			modifyPayload: func(tp *testPayload) {
+				tp.header.Set("webhook-id", tp.header.Get("svix-id"))
+			},
+			expectedErr: true,
+		},
+		{
+			name:        "single mixed svix signature field is rejected",
+			testPayload: newTestPayload(time.Now()),
+			modifyPayload: func(tp *testPayload) {
+				tp.header.Set("webhook-signature", tp.header.Get("svix-signature"))
+			},
+			expectedErr: true,
+		},
+		{
+			name:        "single mixed svix timestamp field is rejected",
+			testPayload: newTestPayload(time.Now()),
+			modifyPayload: func(tp *testPayload) {
+				tp.header.Set("webhook-timestamp", tp.header.Get("svix-timestamp"))
+			},
+			expectedErr: true,
+		},
+		{
+			name:        "unbranded request with one svix field is rejected",
+			testPayload: newTestPayload(time.Now()),
+			modifyPayload: func(tp *testPayload) {
+				unbrandedHeaders := http.Header{}
+				unbrandedHeaders.Set("webhook-id", tp.header.Get("svix-id"))
+				unbrandedHeaders.Set("webhook-timestamp", tp.header.Get("svix-timestamp"))
+				unbrandedHeaders.Set("webhook-signature", tp.header.Get("svix-signature"))
+				tp.header = unbrandedHeaders
+				tp.header.Set("svix-id", tp.header.Get("webhook-id"))
+			},
+			expectedErr: true,
+		},
+		{
+			name:        "mixed headers with empty value are rejected",
+			testPayload: newTestPayload(time.Now()),
+			modifyPayload: func(tp *testPayload) {
+				tp.header.Set("webhook-id", "")
+			},
+			expectedErr: true,
+		},
+		{
 			name:        "missing id returns error",
 			testPayload: newTestPayload(time.Now()),
 			modifyPayload: func(tp *testPayload) {

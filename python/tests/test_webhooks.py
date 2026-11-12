@@ -119,6 +119,63 @@ def test_valid_unbranded_signature_is_valid():
     wh.verify(testPayload.payload, testPayload.header)
 
 
+def test_mixed_headers_both_complete_sets_raises_error():
+    testPayload = PayloadForTesting()
+    testPayload.header.update(
+        {
+            "webhook-id": testPayload.header["svix-id"],
+            "webhook-signature": testPayload.header["svix-signature"],
+            "webhook-timestamp": testPayload.header["svix-timestamp"],
+        }
+    )
+
+    wh = Webhook(testPayload.secret)
+
+    with pytest.raises(WebhookVerificationError):
+        wh.verify(testPayload.payload, testPayload.header)
+
+
+@pytest.mark.parametrize(
+    ("svix_key", "webhook_key"),
+    [
+        ("svix-id", "webhook-id"),
+        ("svix-signature", "webhook-signature"),
+        ("svix-timestamp", "webhook-timestamp"),
+    ],
+)
+def test_mixed_headers_single_field_raises_error(svix_key, webhook_key):
+    testPayload = PayloadForTesting()
+    testPayload.header[webhook_key] = testPayload.header[svix_key]
+
+    wh = Webhook(testPayload.secret)
+
+    with pytest.raises(WebhookVerificationError):
+        wh.verify(testPayload.payload, testPayload.header)
+
+
+@pytest.mark.parametrize(
+    ("svix_key", "webhook_key"),
+    [
+        ("svix-id", "webhook-id"),
+        ("svix-signature", "webhook-signature"),
+        ("svix-timestamp", "webhook-timestamp"),
+    ],
+)
+def test_mixed_headers_opposite_direction_raises_error(svix_key, webhook_key):
+    testPayload = PayloadForTesting()
+    testPayload.header = {
+        "webhook-id": testPayload.header["svix-id"],
+        "webhook-signature": testPayload.header["svix-signature"],
+        "webhook-timestamp": testPayload.header["svix-timestamp"],
+    }
+    testPayload.header[svix_key] = testPayload.header[webhook_key]
+
+    wh = Webhook(testPayload.secret)
+
+    with pytest.raises(WebhookVerificationError):
+        wh.verify(testPayload.payload, testPayload.header)
+
+
 def test_old_timestamp_fails():
     testPayload = PayloadForTesting(
         datetime.now(tz=timezone.utc) - tolerance - timedelta(seconds=1)
